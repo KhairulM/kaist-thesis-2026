@@ -1,0 +1,150 @@
+%% ===================================================================
+%% Chapter 3. Proposed Method
+%% ===================================================================
+
+\chapter{Proposed Method}
+\label{ch:method}
+
+This chapter formulates the one-versus-one quadrotor pursuit--evasion problem and presents the two components of the proposed approach: a population-based self-play framework with multi-metric opponent sampling (Section~\ref{sec:selfplay}) and an echo state network module for online adaptation of the pursuer (Section~\ref{sec:esn}).
+
+\section{Problem Formulation}
+\label{sec:problem}
+
+\subsection{Pursuit--Evasion as a Markov Game}
+\noindent
+We consider a two-player zero-sum Markov game between a pursuer $P$ and an evader $E$, defined by the tuple $(\mathcal{S}, \mathcal{O}^P, \mathcal{O}^E, \mathcal{A}^P, \mathcal{A}^E, T, r^P, r^E, \gamma)$. At each step $t$, each agent $i \in \{P, E\}$ receives an observation $o^i_t \in \mathcal{O}^i$ and selects an action $a^i_t \sim \pi^i(\cdot \mid o^i_t)$. The environment transitions according to the quadrotor dynamics $T$, and each agent receives a reward $r^i_t$. The pursuer seeks to capture the evader as quickly as possible; the evader seeks to survive until the time limit. When one side is being trained, the other is a fixed policy drawn from a population, so from the learner's point of view the problem reduces to a partially observable MDP whose dynamics depend on the unknown opponent.
+
+\subsection{Vehicle and Arena}
+\noindent
+Both agents are Crazyflie quadrotors simulated in Isaac Sim through the OmniDrones framework \cite{xuOmniDronesEfficientFlexible2023}. The game takes place inside a bounded box of $8\,\text{m} \times 8\,\text{m}$ horizontally and $0.1$--$3.0\,\text{m}$ vertically. The two drones are spawned at random positions with a minimum separation of $1\,\text{m}$. To improve robustness, the mass ($\pm 5\%$), thrust-to-weight ratio ($\pm 15\%$), inertia ($\pm 10\%$), and motor time constants ($0.08$--$0.17\,\text{s}$) of the learning agent are randomized at every episode.
+
+\subsection{Observation and Action Spaces}
+\noindent
+The observation of each agent is expressed in its own body frame so that a policy trained in one role can be replayed as the opponent of the other role. It consists of
+\begin{equation}
+    o^i_t = \big[\, \mathbf{p}^i,\ \mathrm{vec}(\mathbf{R}^i),\ \mathbf{v}^i_b,\ \boldsymbol{\omega}^i_b,\ \Delta\mathbf{p}_b,\ \Delta\mathbf{v}_b,\ a^i_{t-1} \,\big] \in \mathbb{R}^{28},
+\end{equation}
+where $\mathbf{p}^i$ is the agent position, $\mathbf{R}^i$ its rotation matrix, $\mathbf{v}^i_b$ and $\boldsymbol{\omega}^i_b$ its body-frame linear and angular velocities, $\Delta\mathbf{p}_b$ and $\Delta\mathbf{v}_b$ the opponent's position and velocity relative to the agent expressed in the agent's body frame, and $a^i_{t-1}$ the previous action. The critic additionally receives a time encoding of the episode progress.
+
+The action $a^i_t = [\omega_x, \omega_y, \omega_z, T] \in [-1, 1]^4$ specifies desired body rates and normalized collective thrust (CTBR), which an on-board PID rate controller converts to motor commands. CTBR control has been shown to give agile behavior and robust sim-to-real transfer \cite{kaufmannBenchmarkComparisonLearned2022, chenWhatMattersLearning2025a, tangAgilePEAutonomousUAV2026a}.
+
+\subsection{Episode Termination}
+\noindent
+The pursuer captures the evader when their distance falls below the capture radius $d_c = 0.1\,\text{m}$. An episode terminates on capture, when either drone falls below the minimum altitude (a crash), when the evader leaves the arena, or on a numerically invalid state; it is truncated after $T_{\max} = 1500$ control steps, which counts as a successful escape for the evader. % TODO: state T_max in seconds once the control period is fixed.
+
+\subsection{Reward Design}
+\label{sec:reward}
+\noindent
+The reward consists of a terminal term shared by both roles and role-specific dense terms. Let $W$ denote the terminal reward magnitude and $s \in (0,1)$ a partial-credit factor. The terminal outcomes are summarized in Table~\ref{tab:terminal}.
+
+\begin{table}[t]
+    \caption[Terminal rewards]{Terminal rewards for each outcome. $W = 100$ and $s = 0.25$ in all experiments.}
+    \label{tab:terminal}
+    \begin{center}
+        \begin{tabular}{lcc}
+            \hline\hline
+            Outcome                   & Pursuer & Evader \\
+            \hline
+            Capture                   & $+W$    & $-W$   \\
+            Timeout (evader survives) & $-W$    & $+W$   \\
+            Opponent crashes          & $+sW$   & $+sW$  \\
+            Own crash                 & $-W$    & $-W$   \\
+            Evader leaves the arena   & $0$     & $-W$   \\
+            \hline\hline
+        \end{tabular}
+    \end{center}
+\end{table}
+
+The partial credit for an opponent crash is a deliberate design choice. When an opponent crash was rewarded as a full win, the pursuer learned to keep its distance and wait for a scripted evader to fall out of the sky: most of its ``wins'' came from evader crashes and its true capture rate collapsed. Partial credit keeps a signal for forcing errors while making capture strictly the best outcome.
+
+The pursuer additionally receives an approach reward proportional to the decrease in distance $d_t$ to the evader and a precision potential that pulls it through the final meter:
+\begin{equation}
+    r^{P,\text{dense}}_t = w_a (d_{t-1} - d_t) + w_p\, e^{-k d_t}.
+\end{equation}
+The evader receives a small per-step survival reward $r_s$ and a penalty that ramps up within a margin of the arena walls, so that it learns the boundary before reaching it.
+
+Both agents are penalized for aggressive control through three complementary terms:
+\begin{equation}
+    r^{\text{smooth}}_t = - w_\omega \|\boldsymbol{\omega}_b\| - w_{\Delta} \|a_t - a_{t-1}\| - w_c \|\tanh(a_{t,1:3})\|,
+\end{equation}
+penalizing respectively the actual body rate, the change in action between steps, and the magnitude of the commanded body rate. The third term is essential for deployment: at the training control rate a saturated rate command is never fully realized within one step, so the first term barely penalizes it, and a sustained saturated command has no step-to-step change, so the second term does not either. The real firmware rate loop, however, tracks such commands faithfully and can tumble the vehicle.
+
+\section{Population-Based Self-Play}
+\label{sec:selfplay}
+
+\subsection{Generational Training Loop}
+\noindent
+Algorithm~\ref{alg:selfplay} summarizes the training procedure. Two populations $\Pi^P$ and $\Pi^E$ are seeded with scripted heuristics: a pursuing heuristic for the pursuer pool, and hovering, circular-orbit, and fleeing heuristics for the evader pool. Each generation trains one side with PPO \cite{yuSurprisingEffectivenessPPO}, alternating between pursuer and evader. The new policy is warm-started from the latest policy of the same role and trained against frozen opponents sampled from the other population. After training, it is evaluated against every opponent in the pool, the resulting matchup statistics are stored, and the policy is added to its population.
+
+\begin{figure}[t]
+    \begin{center}
+        \fbox{\begin{minipage}{0.9\linewidth}
+                \textbf{Algorithm 1: Generational population-based self-play}\\[2pt]
+                \textbf{Input:} heuristic seeds $\Pi^P_0$, $\Pi^E_0$; number of generations $G$; temperature $\tau$; metric weights $\{w_m\}$\\
+                \textbf{for} $g = 0, \dots, G-1$ \textbf{do}\\
+                \hspace*{1em} $i \leftarrow$ pursuer if $g$ is even, else evader; \ $j \leftarrow$ the other role\\
+                \hspace*{1em} compute sampling probabilities $q(\pi^j)$ for all $\pi^j \in \Pi^j$ using Eq.~\eqref{eq:sampling}\\
+                \hspace*{1em} assign each parallel environment an opponent $\pi^j \sim q$\\
+                \hspace*{1em} $\pi^i_g \leftarrow$ PPO$(\text{init} = \pi^i_{g-1})$ against the assigned opponents\\
+                \hspace*{1em} evaluate $\pi^i_g$ against every $\pi^j \in \Pi^j$ and store matchup metrics\\
+                \hspace*{1em} $\Pi^i \leftarrow \Pi^i \cup \{\pi^i_g\}$\\
+                \textbf{end for}
+            \end{minipage}}
+    \end{center}
+    \caption[Generational self-play algorithm]{Generational population-based self-play.}
+    \label{alg:selfplay}
+\end{figure}
+
+Heuristic opponents are flown through the same CTBR and rate-controller stack as the learned policies. Their targets are clamped inside the arena and their tilt is limited, so that they remain physically feasible. The fleeing heuristic in particular escapes horizontally at a fixed altitude and brakes before the walls; a naive three-dimensional flee frequently dived into the ground or crashed into a wall, removing itself from the game before any interception could occur.
+
+\subsection{Multi-Metric Opponent Sampling}
+\noindent
+For every matchup between the current reference policy of the learning role and a candidate opponent $\pi^j$, the evaluation stage records five metrics: the pursuer capture rate, the mean time to capture, the mean inter-drone distance, the mean motor effort, and the learner's own error rate (fraction of episodes in which the learner crashed or left the arena). Each metric $m$ is min--max normalized across candidates and oriented by a sign $\sigma_m^i \in \{-1, +1\}$ so that a larger value always indicates an opponent that is harder for the learner of role $i$. For example, a hard evader has a low capture rate and a long capture time, while a hard pursuer has the opposite. The learner's error rate is oriented as harder-when-larger for both roles, since an opponent that forces the learner into risky flight is difficult regardless of which side is learning. The hardness score and sampling distribution are
+\begin{equation}
+    h(\pi^j) = \sum_{m} w_m\, \sigma^i_m\, \tilde{x}_m(\pi^j), \qquad
+    q(\pi^j) = \frac{\exp\!\big(h(\pi^j)/\tau\big)}{\sum_{k} \exp\!\big(h(\pi^k)/\tau\big)},
+    \label{eq:sampling}
+\end{equation}
+where $\tilde{x}_m$ is the normalized metric, $w_m$ its weight, and $\tau$ a temperature. A low temperature focuses training on the hardest opponents and a high temperature approaches uniform sampling. Without matchup data (cold start), sampling is uniform.
+
+The additional metrics capture aspects of difficulty that win rate alone misses. In particular, the learner's error rate distinguishes an evader that wins by forcing the pursuer to crash from one that wins by clean evasion; both may have similar capture rates but require different counter-strategies. We use $w = (1.0, 0.5, 0.0, 0.25, 1.0)$ for (capture rate, time to capture, distance, motor effort, error rate) and $\tau = 0.9$.
+
+\section{Echo State Network Adaptation Module}
+\label{sec:esn}
+
+\subsection{Motivation}
+\noindent
+A pursuer trained against a population learns a response to the \emph{mixture} of opponents it has seen. At test time, however, it faces one specific evader, possibly with a strategy that was absent from training or that changes during the episode. We therefore provide the pursuer with an online-adapted prediction of the evader's motion, computed by an ESN whose readout is updated by RLS at every step \cite{yoshimuraOnlineAdaptiveReinforcement2026}. Because only a linear readout is adapted, the module requires no backpropagation at test time.
+
+\subsection{Reservoir Dynamics}
+\noindent
+The ESN input is the pursuer's observation $u_t = o^P_t$. A reservoir of $N_x = 500$ leaky-integrator units evolves as
+\begin{equation}
+    \mathbf{x}_t = (1-\alpha)\,\mathbf{x}_{t-1} + \alpha \tanh\!\big(\mathbf{W}_{\text{in}} \mathbf{u}_t + \mathbf{W}_{\text{res}} \mathbf{x}_{t-1}\big),
+\end{equation}
+where $\alpha = 0.3$ is the leak rate. The input weights $\mathbf{W}_{\text{in}}$ are drawn uniformly from $[-0.1, 0.1]$, and the recurrent weights $\mathbf{W}_{\text{res}}$ are drawn uniformly from $[-1, 1]$ and rescaled to a spectral radius of $0.9$. Both are fixed after initialization. With the feature vector $\boldsymbol{\phi}_t = [\mathbf{x}_t; 1]$, the readout predicts
+\begin{equation}
+    \hat{\mathbf{y}}_{t+1} = \mathbf{W}_{\text{out}}\, \boldsymbol{\phi}_t,
+\end{equation}
+where the target $\mathbf{y}_{t+1} = [\Delta\mathbf{p}_b; \Delta\mathbf{v}_b]_{t+1} \in \mathbb{R}^6$ is the evader's relative position and velocity in the pursuer's body frame at the next step. The prediction $\hat{\mathbf{y}}_{t+1}$ is appended to the policy observation.
+
+\subsection{Online Readout Update}
+\noindent
+When the true $\mathbf{y}_{t}$ becomes available, the readout is updated by RLS with forgetting factor $\lambda = 0.99$:
+\begin{align}
+    \mathbf{e}_t            & = \mathbf{y}_t - \mathbf{W}_{\text{out}} \boldsymbol{\phi}_{t-1},                                                                   \\
+    \mathbf{k}_t            & = \frac{\mathbf{P}_{t-1} \boldsymbol{\phi}_{t-1}}{\lambda + \boldsymbol{\phi}_{t-1}^\top \mathbf{P}_{t-1} \boldsymbol{\phi}_{t-1}}, \\
+    \mathbf{W}_{\text{out}} & \leftarrow \mathbf{W}_{\text{out}} + \mathbf{e}_t \mathbf{k}_t^\top,                                                                \\
+    \mathbf{P}_t            & = \frac{1}{\lambda}\big(\mathbf{P}_{t-1} - \mathbf{k}_t \boldsymbol{\phi}_{t-1}^\top \mathbf{P}_{t-1}\big),
+\end{align}
+with $\mathbf{P}_0 = \delta \mathbf{I}$ and $\delta = 100$. To prevent wind-up of $\mathbf{P}$ in weakly excited directions, its trace is capped at $10^6$.
+
+\subsection{Readout Modes}
+\noindent
+We consider three ways of initializing and updating the readout:
+\begin{itemize}
+    \item \textbf{Per-episode (ESN-OA).} Each environment starts every episode with $\mathbf{W}_{\text{out}} = \mathbf{0}$ and adapts it with its own RLS, as in \cite{yoshimuraOnlineAdaptiveReinforcement2026}.
+    \item \textbf{Shared.} A single readout is fitted centrally by ridge regression on reservoir features pooled from all parallel environments, using exponentially forgotten normal equations re-solved periodically. It is frozen at deployment, so the module acts as a learned, non-adaptive predictor.
+    \item \textbf{Shared-adapt.} Each episode starts from the shared readout and then adapts it with per-environment RLS, combining a good prior with online specialization.
+\end{itemize}
+Comparing these modes separates the effect of the extra predictive input from the effect of online adaptation itself.

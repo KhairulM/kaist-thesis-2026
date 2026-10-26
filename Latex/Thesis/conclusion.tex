@@ -1,0 +1,16 @@
+%% ===================================================================
+%% Chapter 5. Conclusion
+%% ===================================================================
+
+\chapter{Conclusion}
+\label{ch:conclusion}
+
+\section{Summary}
+\noindent
+This thesis addressed the problem of learning a drone pursuit policy that remains effective against evaders that actively react to it and whose behavior may be unknown at deployment. We proposed a population-based self-play framework for one-versus-one quadrotor pursuit--evasion with CTBR control, in which each generation trains one side against frozen opponents sampled by a multi-metric, temperature-scaled hardness score. A reward design with partial credit for opponent-induced crashes and penalties on commanded body rates prevented degenerate strategies and aggressive control unsuitable for real hardware. On top of this framework, we equipped the pursuer with an echo state network whose linear readout is updated online by recursive least squares to predict the evader's relative motion, providing a lightweight, gradient-free mechanism for test-time adaptation.
+
+% TODO: summarize the key quantitative findings from Chapter 4.
+
+\section{Future Work}
+\noindent
+Several directions remain open. First, the ESN-equipped pursuer should be validated in real flight against both scripted and learned evaders, following the zero-shot transfer demonstrated by recent self-play systems \cite{tangAgilePEAutonomousUAV2026a, gavinAgileInterceptionFlying2026, ronceroLearnedControllersAgile2026}. Second, the framework can be extended to multiple pursuers or evaders, where cooperation among pursuers and the prediction of several opponents become important \cite{chenOnlinePlanningMultiUAV2025, gavinInterceptingAgileTarget2026}. Third, the observation could be replaced by onboard perception, introducing estimation noise and limited field of view as in practical interception systems \cite{pliskaSafeMidAirDrone2024}. Finally, the online adaptation module could be combined with adaptation to the pursuer's own dynamics \cite{panLearningFlyRapid2026, xingContinualRobotPolicy2026}, so that a single policy adapts to both its opponent and its environment.

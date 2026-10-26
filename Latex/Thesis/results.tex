@@ -1,0 +1,141 @@
+%% ===================================================================
+%% Chapter 4. Experiments, Results, and Discussion
+%% ===================================================================
+
+\chapter{Experiments, Results, and Discussion}
+\label{ch:results}
+
+This chapter evaluates the proposed approach. Section~\ref{sec:setup} describes the experimental setup, Section~\ref{sec:selfplay-results} analyzes the self-play population, Section~\ref{sec:esn-results} evaluates the ESN adaptation module against unseen evaders, and Section~\ref{sec:discussion} discusses the findings and limitations.
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+\subsection{Simulation and Training}
+\noindent
+All experiments are run in Isaac Sim with the OmniDrones framework \cite{xuOmniDronesEfficientFlexible2023} using 4096 parallel environments on a single GPU. % TODO: GPU model, wall-clock per generation.
+Policies are trained with PPO \cite{yuSurprisingEffectivenessPPO}; the hyperparameters are listed in Table~\ref{tab:ppo}. Self-play runs for 12 generations of $5 \times 10^8$ environment frames each, starting with the pursuer and warm-starting every policy from the latest policy of the same role.
+
+\begin{table}[t]
+    \caption[PPO hyperparameters]{PPO hyperparameters.}
+    \label{tab:ppo}
+    \begin{center}
+        \begin{tabular}{lc}
+            \hline\hline
+            Parameter                & Value           \\
+            \hline
+            Parallel environments    & 4096            \\
+            Frames per generation    & $5 \times 10^8$ \\
+            Discount factor $\gamma$ & 0.99            \\
+            % TODO: fill in from the PPO config
+            GAE $\lambda$            & --              \\
+            Learning rate            & --              \\
+            Clip ratio               & --              \\
+            Actor / critic network   & --              \\
+            \hline\hline
+        \end{tabular}
+    \end{center}
+\end{table}
+
+\subsection{Compared Methods}
+\noindent
+To evaluate the adaptation module, all pursuers are trained with identical PPO settings, rewards, arena, domain randomization, and frame budget; only the adaptation mechanism differs:
+\begin{itemize}
+    \item \textbf{PPO-MLP}: the baseline policy without any adaptation module.
+    \item \textbf{ESN-shared}: ESN with a centrally fitted readout, frozen at test time.
+    \item \textbf{ESN-OA}: ESN with a per-episode RLS readout.
+    \item \textbf{ESN-shared-adapt}: ESN with the shared readout as initialization and per-episode RLS.
+    \item \textbf{PPO-GRU}: a recurrent policy whose hidden state can implicitly infer the evader's behavior.
+    \item \textbf{RLS-raw}: the same RLS readout applied to a window of raw observations, without a reservoir.
+\end{itemize}
+% TODO: add or remove methods to match the runs actually completed.
+
+\subsection{Evader Scenarios}
+\noindent
+Pursuers are evaluated on five groups of evaders:
+\begin{itemize}
+    \item \textbf{T0 (in-distribution):} the heuristics and RL evaders used in training.
+    \item \textbf{T1 (new heuristics):} weaving, zig-zag, spiral-climb, and fast-flee evaders not seen during training.
+    \item \textbf{T2 (held-out RL evaders):} later-generation self-play evaders excluded from the training pool.
+    \item \textbf{T3 (strategy switch):} evaders that switch strategy partway through an episode.
+    \item \textbf{T4 (dynamics shift):} evaders whose mass, thrust, or motor time constants lie outside the training randomization range.
+\end{itemize}
+
+\subsection{Evaluation Metrics}
+\noindent
+For each method and scenario we report the capture rate, the time to capture, the pursuer's own crash rate, the mean motor effort, and, for methods with a predictor, the prediction error of the evader's relative state. For the strategy-switch scenarios we additionally report the recovery time, defined as the time after the switch until the pursuer's rate of closing distance returns to its pre-switch level. Results are averaged over three training seeds and at least 4096 evaluation episodes per seed, with 95\% bootstrap confidence intervals.
+
+\section{Self-Play Population Analysis}
+\label{sec:selfplay-results}
+
+\subsection{Cross-Generation Win-Rate Matrix}
+\noindent
+% TODO: insert winrate_matrix.png produced by scripts/selfplay/plot_winrate_matrix.py
+\begin{figure}[t]
+    \begin{center}
+        \fbox{\parbox[c][5cm][c]{0.8\linewidth}{\centering Win-rate matrix placeholder}}
+    \end{center}
+    \caption[Cross-generation win-rate matrix]{Pursuer capture rate for every pursuer generation (rows) against every evader generation (columns). Cells not evaluated are left blank.}
+    \label{fig:winrate}
+\end{figure}
+
+Figure~\ref{fig:winrate} shows the capture rate of each pursuer generation against each evader generation. A healthy population exhibits a staircase pattern: each pursuer beats the evaders it was trained against and loses to the newer evaders trained to counter it.
+% TODO: describe the observed pattern.
+
+\subsection{Effect of the Opponent Sampler}
+\noindent
+% TODO: compare multi-metric sampling with win-rate-only and uniform sampling.
+
+\subsection{Effect of Reward Design}
+\noindent
+% TODO: outcome breakdown (capture / crash / timeout) with and without partial credit and the command-rate penalty.
+
+\subsection{Emergent Behaviors}
+\noindent
+% TODO: qualitative description and trajectory plots of learned pursuit and evasion strategies.
+
+\section{Online Adaptation with the ESN Module}
+\label{sec:esn-results}
+
+\subsection{Capture Performance on Unseen Evaders}
+\noindent
+% TODO: table of capture rate / time to capture per method x scenario (T0--T4).
+\begin{table}[t]
+    \caption[Capture performance against unseen evaders]{Capture rate (\%) per method and scenario (mean $\pm$ 95\% CI over seeds).}
+    \label{tab:esn-capture}
+    \begin{center}
+        \begin{tabular}{lccccc}
+            \hline\hline
+            Method           & T0 & T1 & T2 & T3 & T4 \\
+            \hline
+            PPO-MLP          & -- & -- & -- & -- & -- \\
+            ESN-shared       & -- & -- & -- & -- & -- \\
+            ESN-OA           & -- & -- & -- & -- & -- \\
+            ESN-shared-adapt & -- & -- & -- & -- & -- \\
+            PPO-GRU          & -- & -- & -- & -- & -- \\
+            RLS-raw          & -- & -- & -- & -- & -- \\
+            \hline\hline
+        \end{tabular}
+    \end{center}
+\end{table}
+
+\subsection{Adaptation After a Strategy Switch}
+\noindent
+% TODO: prediction error and distance vs. time around the switch; recovery times.
+
+\subsection{Ablation of Reservoir Parameters}
+\noindent
+% TODO: reservoir size {100, 250, 500}, leak rate {0.1, 0.3, 0.6}, forgetting factor {0.95, 0.99, 0.999}.
+
+\subsection{Computational Cost}
+\noindent
+The per-environment RLS state requires $(N_x+1)^2$ floating-point values, which for $N_x = 500$ is about $2.5 \times 10^5$ values per environment.
+% TODO: inference latency and training wall-clock per method.
+
+\section{Discussion}
+\label{sec:discussion}
+\noindent
+% TODO: interpret results with respect to the hypotheses: (i) ESN improves capture on unseen evaders, (ii) the gain comes from online adaptation rather than the extra input, (iii) the reservoir matters compared with raw history.
+
+\subsection{Limitations}
+\noindent
+% TODO: e.g., simulation-only evaluation of the ESN module, 1v1 setting, fixed arena, training-vs-firmware rate-loop mismatch.
